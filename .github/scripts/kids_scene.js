@@ -116,7 +116,7 @@
     const el = document.createElement('div');
     el.className = 'scene'; el.style.setProperty('--d', sc._dur); el.style.zIndex = i + 1;
     const world = D.kind === 'toys' ? '' : `<div class="world">${background(sc.bg || (D.kind === 'lesson' ? 'room' : 'day'))}${(sc.items || []).map(item).join('')}</div>`;
-    const badge = i > 0 && D.title ? `<div class="badge">${esc(D.title)}</div>` : '';
+    const badge = i > 0 && D.title ? `<div class="badge"${D.wmPos === 'tr' ? ' style="right:auto;left:22px"' : ''}>${esc(D.title)}</div>` : '';
     const label = sc.label ? `<div class="label">${esc(sc.label)}</div>` : '';
     el.innerHTML = world + badge + label + caption(sc);
     if (D.kind === 'toys' && !sc.clip) el.innerHTML = `<div class="world">${(sc.items || []).map(item).join('')}</div>` + caption(sc);
