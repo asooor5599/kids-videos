@@ -7,6 +7,7 @@ on:
       sample:  { description: 'ملف جاهز من مجلد samples (مثل story)', required: false, default: '' }
       rid:     { description: 'معرّف الطلب', required: true }
       preview: { description: 'نشر نسخة للمعاينة على GitHub Pages', required: false, default: 'true' }
+      label:   { description: 'عنوان المقطع (للعرض فقط)', required: false, default: '' }
 permissions:
   contents: write
 concurrency:
@@ -30,6 +31,7 @@ jobs:
         env:
           SPEC: ${{ inputs.spec }}
           SAMPLE: ${{ inputs.sample }}
+          GEMINI_KEYS: ${{ secrets.GEMINI_KEYS }}
         run: |
           set -e
           if [ -z "$SPEC" ]; then
