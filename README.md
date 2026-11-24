@@ -1,2 +1,4 @@
 # kids-videos
-مقاطع أطفال متحركة (قصص، عد وألوان، ألعاب) — Arabic kids animated Shorts renderer
+مقاطع أطفال قصيرة (قصص مصورة، تعليم العد والألوان والحروف، ألعاب) تُرسم وتُركّب تلقائياً على GitHub Actions.
+
+Animated Arabic kids Shorts renderer (stories, lessons, toys) with narration.
