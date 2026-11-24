@@ -402,7 +402,7 @@ cover = os.path.join(out, 'cover.jpg')
 pub = [{k: v for k, v in sc.items() if not k.startswith('_') or k in ('_start', '_dur', '_words')} for sc in scenes]
 for p in pub:
     p['_say0'] = PAD_IN
-DATA = json.dumps({'title': spec.get('title', ''), 'kind': KIND, 'scenes': pub, 'total': TOTAL}, ensure_ascii=False)
+DATA = json.dumps({'title': spec.get('title', ''), 'wmPos': spec.get('wmPos', 'tl') if spec.get('watermark') else '', 'kind': KIND, 'scenes': pub, 'total': TOTAL}, ensure_ascii=False)
 
 
 def launch(p):
@@ -492,6 +492,43 @@ else:
          '-c:v', 'copy', '-c:a', 'copy', '-shortest', '-movflags', '+faststart', video])
     ci = min(1, len(parts) - 1)
     run(['ffmpeg', '-y', '-loglevel', 'error', '-ss', '1.2', '-i', parts[ci], '-frames:v', '1', '-q:v', '3', cover])
+
+
+# ---------------------------------------------------------------- 4) channel watermark (small logo in a corner)
+WM = str(spec.get('watermark') or '')
+if WM:
+    from urllib.parse import urlparse
+    host = urlparse(WM).hostname or ''
+    ok_host = WM.startswith('https://') and (host.endswith('.ggpht.com') or host.endswith('.googleusercontent.com') or host == 'raw.githubusercontent.com')
+    try:
+        if not ok_host:
+            raise RuntimeError('watermark host not allowed: ' + host)
+        src = get(WM, os.path.join(work, 'wm_src'))
+        wm = os.path.join(work, 'wm.png')
+        S = 132
+        if spec.get('wmShape', 'circle') == 'circle':
+            R = S / 2
+            vf = ('scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,format=rgba,'
+                  "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-%f,Y-%f),%f),255,if(lte(hypot(X-%f,Y-%f),%f),255*(%f-hypot(X-%f,Y-%f))/1.5,0))'") % (
+                S, S, S, S, R, R, R - 1.5, R, R, R, R, R, R)
+        else:
+            vf = 'scale=170:170:force_original_aspect_ratio=decrease,format=rgba'
+        run(['ffmpeg', '-y', '-loglevel', 'error', '-i', src, '-frames:v', '1', '-vf', vf, wm])
+        pos = spec.get('wmPos', 'tl')
+        x = '36' if pos == 'tl' else 'W-w-36'
+        y = '40'
+        alpha = float(spec.get('wmAlpha', 0.85))
+        fc = '[1:v]format=rgba,colorchannelmixer=aa=%.2f[w];[0:v][w]overlay=%s:%s:format=auto,format=yuv420p[v]' % (alpha, x, y)
+        tmp = os.path.join(work, 'wm_video.mp4')
+        run(['ffmpeg', '-y', '-loglevel', 'error', '-i', video, '-i', wm, '-filter_complex', fc, '-map', '[v]', '-map', '0:a',
+             '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'copy', '-movflags', '+faststart', tmp])
+        os.replace(tmp, video)
+        ctmp = os.path.join(work, 'wm_cover.jpg')
+        run(['ffmpeg', '-y', '-loglevel', 'error', '-i', cover, '-i', wm, '-filter_complex', fc.replace(',format=yuv420p[v]', '[v]'), '-map', '[v]', '-q:v', '3', ctmp])
+        os.replace(ctmp, cover)
+        log('watermark added', pos)
+    except Exception as e:  # noqa: BLE001
+        log('watermark skipped:', e)
 
 info = {'voice': VOICE_USED, 'type': KIND, 'title': spec.get('title'), 'duration': round(dur(video), 2), 'size': os.path.getsize(video), 'scenes': len(scenes)}
 json.dump(info, open(os.path.join(out, 'info.json'), 'w'), ensure_ascii=False)
