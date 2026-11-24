@@ -1,5 +1,5 @@
 name: kids-video
-run-name: kids ${{ inputs.rid }}
+run-name: kids ${{ inputs.rid }} ${{ inputs.label }}
 on:
   workflow_dispatch:
     inputs:
