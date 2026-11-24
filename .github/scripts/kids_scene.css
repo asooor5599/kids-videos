@@ -68,8 +68,39 @@ svg .pour{animation:pour .8s linear infinite}
 .badge{position:absolute;top:22px;right:22px;background:rgba(255,255,255,.9);color:#5a3d8a;font-weight:800;font-size:22px;padding:4px 18px;border-radius:24px;box-shadow:0 4px 0 rgba(0,0,0,.08);z-index:60}
 .label{position:absolute;top:150px;left:0;right:0;text-align:center;font-family:Big;font-size:76px;color:#fff;-webkit-text-stroke:10px #ff5d8f;paint-order:stroke fill;text-shadow:0 8px 0 rgba(0,0,0,.2);z-index:60;animation:pop .6s cubic-bezier(.3,1.6,.5,1) .15s both;--s:1;transform:none}
 .label{animation-name:lbl}@keyframes lbl{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:scale(1)}}
-.cap{position:absolute;left:20px;right:20px;bottom:46px;display:flex;justify-content:center;z-index:70}
-.capin{background:rgba(255,255,255,.95);border-radius:30px;padding:14px 24px 10px;text-align:center;font-weight:800;font-size:31px;line-height:1.55;color:#3a2a55;box-shadow:0 8px 0 rgba(58,42,85,.18);border:4px solid #ffd23f}
+.cap{position:absolute;left:20px;right:20px;bottom:30px;display:flex;justify-content:center;z-index:70}
+.capin{background:rgba(255,255,255,.93);border-radius:28px;padding:10px 22px 7px;text-align:center;font-weight:800;font-size:28px;line-height:1.55;color:#3a2a55;box-shadow:0 8px 0 rgba(58,42,85,.18);border:4px solid #ffd23f}
 .cap span{display:inline-block;transition:none}
 .cap span.on{color:#ff5d1f;transform:scale(1.12)}
 .cap span.done{color:#3a2a55}
+
+/* ---- v2 art: parallax layers, camera, light, particles */
+.lay{position:absolute;left:-50px;top:0}
+.l-far{animation:par calc(var(--d)*1s) linear both;--pd:-8px}
+.l-mid{animation:par calc(var(--d)*1s) linear both;--pd:-18px}
+.l-near{animation:par calc(var(--d)*1s) linear both;--pd:-30px}
+.l-front{left:0;width:540px;height:960px;z-index:50;pointer-events:none;animation:par calc(var(--d)*1s) linear both;--pd:-55px}
+.l-front .fb{position:absolute;bottom:-34px;filter:blur(3.5px);transform:scale(1.5);transform-origin:50% 100%}
+@keyframes par{from{transform:translateX(0)}to{transform:translateX(var(--pd))}}
+.cam-kb{animation:kb calc(var(--d)*1s) ease-in-out both}
+.cam-in{animation:camin calc(var(--d)*1s) ease-in-out both;transform-origin:50% 62%}
+@keyframes camin{from{transform:scale(1.02)}to{transform:scale(1.13)}}
+.cam-panL{animation:panL calc(var(--d)*1s) ease-in-out both}
+@keyframes panL{from{transform:scale(1.1) translateX(18px)}to{transform:scale(1.1) translateX(-18px)}}
+.cam-panR{animation:panR calc(var(--d)*1s) ease-in-out both}
+@keyframes panR{from{transform:scale(1.1) translateX(-18px)}to{transform:scale(1.1) translateX(18px)}}
+.cam-focus{animation:focus calc(var(--d)*1s) cubic-bezier(.4,0,.2,1) both;transform-origin:var(--fx) var(--fy)}
+@keyframes focus{0%{transform:scale(1)}35%,100%{transform:scale(1.22)}}
+.rays{position:absolute;inset:-200px;z-index:52;pointer-events:none;background:repeating-conic-gradient(from 0deg at 85% 12%,rgba(255,250,220,.10) 0deg 6deg,transparent 6deg 16deg);mix-blend-mode:screen;animation:rays 18s linear infinite;transform-origin:85% 12%}
+@keyframes rays{from{transform:rotate(-4deg)}to{transform:rotate(4deg)}}
+.parts{position:absolute;inset:0;z-index:53;pointer-events:none}
+.pt{position:absolute;width:7px;height:7px;border-radius:50%;background:radial-gradient(#fffbe0,rgba(255,236,150,.6) 45%,transparent 70%);animation:drift 6s ease-in-out infinite;opacity:.8}
+.pt.ff{width:9px;height:9px;background:radial-gradient(#fbffb0,rgba(220,255,120,.7) 40%,transparent 70%);box-shadow:0 0 14px 4px rgba(230,255,140,.45);animation:drift 5s ease-in-out infinite,blinkf 2.2s ease-in-out infinite}
+@keyframes drift{0%,100%{transform:translate(0,0)}50%{transform:translate(var(--px),-38px)}}
+@keyframes blinkf{0%,100%{opacity:.25}50%{opacity:1}}
+.vig{position:absolute;inset:0;z-index:58;pointer-events:none;background:radial-gradient(ellipse at 50% 45%,transparent 58%,rgba(20,10,40,.28) 100%)}
+svg .tw{animation:twinkle 2s ease-in-out infinite;transform-box:fill-box;transform-origin:50% 50%}
+svg .mopen{transform-box:fill-box;transform-origin:50% 0}
+.waving svg .armR{animation:wave .55s ease-in-out infinite alternate;transform-box:fill-box;transform-origin:30% 5%}
+@keyframes wave{from{transform:rotate(-10deg)}to{transform:rotate(-120deg)}}
+.it svg{overflow:visible}
