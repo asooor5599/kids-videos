@@ -1,0 +1,70 @@
+name: kids-video
+run-name: kids ${{ inputs.rid }}
+on:
+  workflow_dispatch:
+    inputs:
+      spec:    { description: 'بيانات المقطع JSON (أو اتركه فارغاً واستخدم sample)', required: false, default: '' }
+      sample:  { description: 'ملف جاهز من مجلد samples (مثل story)', required: false, default: '' }
+      rid:     { description: 'معرّف الطلب', required: true }
+      preview: { description: 'نشر نسخة للمعاينة على GitHub Pages', required: false, default: 'true' }
+permissions:
+  contents: write
+concurrency: { group: kids-${{ inputs.rid }} }
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: "/.github/scripts\n/samples", sparse-checkout-cone-mode: false }
+      - name: Tools and fonts
+        run: |
+          set -e
+          command -v ffmpeg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null; }
+          pip3 install --quiet edge-tts playwright numpy 2>/dev/null || pip3 install --quiet --break-system-packages edge-tts playwright numpy
+          mkdir -p fonts; F=https://raw.githubusercontent.com/google/fonts/main/ofl
+          curl -fsSL --retry 3 -o fonts/BalooBhaijaan2.ttf "$F/baloobhaijaan2/BalooBhaijaan2%5Bwght%5D.ttf"
+          curl -fsSL --retry 3 -o fonts/Lalezar.ttf $F/lalezar/Lalezar-Regular.ttf
+      - name: Render
+        env:
+          SPEC: ${{ inputs.spec }}
+          SAMPLE: ${{ inputs.sample }}
+        run: |
+          set -e
+          if [ -z "$SPEC" ]; then
+            case "$SAMPLE" in *[!a-z0-9_-]*|'') echo "::error::sample غير صالح"; exit 1;; esac
+            SPEC=$(cat "samples/$SAMPLE.json")
+          fi
+          python3 - "$SPEC" <<'PY'
+          import json, sys
+          s = json.loads(sys.argv[1])
+          for sc in s.get('scenes', []):
+              c = sc.get('clip')
+              if c and not str(c).startswith('https://cdn.pixabay.com/'):
+                  sys.exit('clip not allowed: %s' % c)
+          PY
+          AIB_FONTS="$PWD/fonts" python3 .github/scripts/kids_video.py "$SPEC" "$PWD/out"
+          ls -la out
+      - name: Preview on GitHub Pages
+        if: ${{ inputs.preview == 'true' }}
+        env:
+          RID: ${{ inputs.rid }}
+        run: |
+          set -e
+          case "$RID" in *[!A-Za-z0-9_-]*) echo "::error::rid غير صالح"; exit 1;; esac
+          git config user.name "kids-bot"; git config user.email "kids-bot@users.noreply.github.com"
+          git sparse-checkout disable || true
+          mkdir -p previews
+          cp out/video.mp4 "previews/$RID.mp4"; cp out/cover.jpg "previews/$RID.jpg"
+          git add "previews/$RID.mp4" "previews/$RID.jpg"
+          git commit -qm "preview $RID"
+          for i in 1 2 3 4; do git pull -q --rebase && git push -q && break; sleep 5; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kids-${{ inputs.rid }}
+          path: |
+            out/video.mp4
+            out/cover.jpg
+            out/info.json
+          retention-days: 2
+          compression-level: 0
