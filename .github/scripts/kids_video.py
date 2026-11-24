@@ -390,6 +390,27 @@ def ff(name, file):
 FONTCSS = ff('Kid', 'BalooBhaijaan2.ttf') + ff('Big', 'Lalezar.ttf')
 CSS = open(os.path.join(HERE, 'kids_scene.css'), encoding='utf-8').read()
 JS = open(os.path.join(HERE, 'kids_scene.js'), encoding='utf-8').read()
+if spec.get('art', 'v2') == 'v2' and os.path.exists(os.path.join(HERE, 'kids_art2.js')):
+    JS = open(os.path.join(HERE, 'kids_art2.js'), encoding='utf-8').read() + '\n' + JS
+
+
+def amp_track(path):
+    """voice loudness per video frame (0..1) → drives the talking mouths"""
+    with wave.open(path) as wv:
+        sr, n = wv.getframerate(), wv.getnframes()
+        a = np.frombuffer(wv.readframes(n), dtype=np.int16).astype(np.float32)
+        if wv.getnchannels() > 1:
+            a = a.reshape(-1, wv.getnchannels()).mean(axis=1)
+    hop = sr / FPS
+    nf = int(len(a) / hop)
+    r = np.array([np.sqrt(np.mean(a[int(k * hop):int((k + 1) * hop)] ** 2) + 1e-9) for k in range(nf)])
+    ref = np.percentile(r[r > r.max() * .05], 90) if (r > r.max() * .05).any() else 1
+    v = np.clip((r / (ref + 1e-9) - .12) * 1.25, 0, 1)
+    v = np.convolve(v, [.25, .5, .25], mode='same')
+    return [round(float(x), 2) for x in v]
+
+
+AMP = amp_track(voice)
 
 try:
     from playwright.sync_api import sync_playwright
@@ -402,7 +423,7 @@ cover = os.path.join(out, 'cover.jpg')
 pub = [{k: v for k, v in sc.items() if not k.startswith('_') or k in ('_start', '_dur', '_words')} for sc in scenes]
 for p in pub:
     p['_say0'] = PAD_IN
-DATA = json.dumps({'title': spec.get('title', ''), 'wmPos': spec.get('wmPos', 'tl') if spec.get('watermark') else '', 'kind': KIND, 'scenes': pub, 'total': TOTAL}, ensure_ascii=False)
+DATA = json.dumps({'amp': AMP, 'fps': FPS, 'title': spec.get('title', ''), 'wmPos': spec.get('wmPos', 'tl') if spec.get('watermark') else '', 'kind': KIND, 'scenes': pub, 'total': TOTAL}, ensure_ascii=False)
 
 
 def launch(p):
