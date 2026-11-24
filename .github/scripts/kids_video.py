@@ -16,6 +16,7 @@ import random
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import wave
 
@@ -61,16 +62,26 @@ def get(url, dest, tries=4):
 
 
 # ---------------------------------------------------------------- 1) narration
-VOICE = spec.get('voice') or 'ar-SA-ZariyahNeural'
-RATE, PITCH = spec.get('rate') or '-8%', spec.get('pitch') or '+6Hz'
+# tts = "gemini" (expressive storyteller voice, Gemini TTS, keys in env GEMINI_KEYS) with automatic fallback to "edge" (Microsoft neural voice)
+TTS = spec.get('tts') or 'gemini'
+VOICE = spec.get('voice') or 'Sulafat'
+KID_VOICE = spec.get('kidVoice') or 'Leda'
+EDGE_VOICE = spec.get('edgeVoice') or (VOICE if '-' in VOICE else 'ar-SA-ZariyahNeural')
+RATE, PITCH = spec.get('rate') or '-6%', spec.get('pitch') or '+8Hz'
+STYLE = spec.get('style') or {
+    'story': 'a warm, gentle and expressive storyteller reading a bedtime picture-book to little children (ages 3-7): smiling voice, playful wonder, soft surprise, clear and slightly slow',
+    'lesson': 'a cheerful, energetic kindergarten teacher: bright, encouraging, rhythmic and clear, with excitement on each new number or word, slightly slow so children can repeat',
+    'toys': 'an excited, friendly kids show host discovering toys with the children: joyful, playful, lots of wonder, clear and not too fast',
+}.get(KIND, 'a warm, cheerful voice for young children')
+TTS_MODELS = spec.get('ttsModels') or ['gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts', 'gemini-3.1-flash-tts-preview', 'gemini-3.8-flash-lite-tts']
 
 
-async def tts(text, mp3):
+async def edge_tts_line(text, mp3, voice):
     import edge_tts
     try:
-        c = edge_tts.Communicate(text, VOICE, rate=RATE, pitch=PITCH, boundary='WordBoundary')
+        c = edge_tts.Communicate(text, voice, rate=RATE, pitch=PITCH, boundary='WordBoundary')
     except TypeError:
-        c = edge_tts.Communicate(text, VOICE, rate=RATE, pitch=PITCH)
+        c = edge_tts.Communicate(text, voice, rate=RATE, pitch=PITCH)
     marks = []
     with open(mp3, 'wb') as f:
         async for ch in c.stream():
@@ -81,44 +92,160 @@ async def tts(text, mp3):
     return marks
 
 
+def gemini_tts(lines):
+    """One request for the whole script → one PCM track, then split per scene on the long pauses."""
+    keys = [k.strip() for k in os.environ.get('GEMINI_KEYS', '').split(',') if k.strip()]
+    if not keys:
+        raise RuntimeError('no GEMINI_KEYS')
+    multi = any(w == 'kid' for w, _ in lines)
+    script = '\n\n'.join(('Kid: ' if w == 'kid' else 'Narrator: ') + s if multi else s for w, s in lines)
+    direction = ('Read the following Arabic script aloud for young children. Narrator: ' + STYLE + '. '
+                 + ('Kid: a cute, happy, curious little cartoon character with a small bright voice. ' if multi else '')
+                 + 'Pronounce Arabic correctly following the diacritics. Leave a clear pause of about one and a half seconds between paragraphs. '
+                 'Do not read these instructions.\n\n')
+    if multi:
+        sc = {'multiSpeakerVoiceConfig': {'speakerVoiceConfigs': [
+            {'speaker': 'Narrator', 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': VOICE}}},
+            {'speaker': 'Kid', 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': KID_VOICE}}}]}}
+    else:
+        sc = {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': VOICE}}}
+    body = json.dumps({'contents': [{'parts': [{'text': direction + script}]}],
+                       'generationConfig': {'responseModalities': ['AUDIO'], 'speechConfig': sc}}).encode()
+    last = None
+    for model in TTS_MODELS:
+        for k in keys:
+            try:
+                req = urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % model, data=body,
+                                             headers={'Content-Type': 'application/json', 'x-goog-api-key': k})
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    j = json.load(r)
+                part = j['candidates'][0]['content']['parts'][0]['inlineData']
+                pcm = __import__('base64').b64decode(part['data'])
+                rate = 24000
+                mt = part.get('mimeType', '')
+                if 'rate=' in mt:
+                    rate = int(mt.split('rate=')[1].split(';')[0])
+                log('gemini tts ok', model, len(pcm) // 2 / rate, 's')
+                return pcm, rate, model
+            except urllib.error.HTTPError as e:
+                last = '%s %s %s' % (model, e.code, e.read()[:160])
+            except Exception as e:  # noqa: BLE001
+                last = '%s %s' % (model, e)
+            log('gemini tts fail:', last)
+    raise RuntimeError(last)
+
+
+def split_on_pauses(wav, n, weights):
+    total = dur(wav)
+    if n == 1:
+        return [(0.0, total)]
+    for d in (0.6, 0.45, 0.32):
+        r = subprocess.run(['ffmpeg', '-i', wav, '-af', 'silencedetect=noise=-36dB:d=%s' % d, '-f', 'null', '-'], capture_output=True, text=True).stderr
+        sil, st = [], None
+        for line in r.splitlines():
+            if 'silence_start:' in line:
+                st = float(line.split('silence_start:')[1].split()[0])
+            elif 'silence_end:' in line and st is not None:
+                en = float(line.split('silence_end:')[1].split()[0])
+                if st > 0.3 and en < total - 0.3:
+                    sil.append((st, en))
+                st = None
+        if len(sil) < n - 1:
+            continue
+        # pick the n-1 gaps that best match the expected paragraph boundaries (long pauses near expected positions)
+        exp, acc, sw = [], 0.0, sum(weights)
+        for w in weights[:-1]:
+            acc += w
+            exp.append(acc / sw * total)
+        chosen = []
+        pool = sorted(sil, key=lambda s: -(s[1] - s[0]))[:max(n - 1, int((n - 1) * 1.8))]
+        pool = sorted(pool)
+        for e in exp:
+            cand = [s for s in pool if s not in chosen and all(s[0] > c[1] for c in chosen)]
+            if not cand:
+                break
+            best = min(cand, key=lambda s: abs((s[0] + s[1]) / 2 - e) / total * 3 - (s[1] - s[0]))
+            chosen.append(best)
+        if len(chosen) != n - 1:
+            continue
+        cuts = [0.0] + [(a + b) / 2 for a, b in chosen] + [total]
+        segs = list(zip(cuts, cuts[1:]))
+        ok = all(b - a > 0.5 for a, b in segs)
+        ratio = [((b - a) / total) / (w / sw) for (a, b), w in zip(segs, weights)]
+        if ok and min(ratio) > 0.3 and max(ratio) < 3.2:
+            return segs
+        log('split check failed d=%s ratios=%s' % (d, [round(x, 2) for x in ratio]))
+    raise RuntimeError('could not split narration into %d parts' % n)
+
+
 scenes = spec['scenes']
 PAD_IN, PAD_OUT = 0.45, 0.75
+lines = [(sc.get('who') or 'narrator', (sc.get('say') or '').strip()) for sc in scenes]
+VOICE_USED = 'silent'
+if not LOCAL and TTS == 'gemini' and all(s for _, s in lines):
+    try:
+        pcm, rate, model = gemini_tts(lines)
+        full = os.path.join(work, 'gem.wav')
+        with wave.open(full, 'wb') as wv:
+            wv.setnchannels(1); wv.setsampwidth(2); wv.setframerate(rate); wv.writeframes(pcm)
+        segs = split_on_pauses(full, len(scenes), [max(4, len(s)) for _, s in lines])
+        for i, (a, b) in enumerate(segs):
+            mp3 = os.path.join(work, 'v%02d.wav' % i)
+            run(['ffmpeg', '-y', '-loglevel', 'error', '-ss', '%.3f' % a, '-to', '%.3f' % b, '-i', full, '-af',
+                 'silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.05,areverse,silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.08,areverse',
+                 mp3])
+            scenes[i]['_mp3'] = mp3
+        VOICE_USED = 'gemini:%s:%s' % (model, VOICE)
+    except Exception as e:  # noqa: BLE001
+        log('gemini narration unavailable → edge voice:', e)
+        for sc in scenes:
+            sc.pop('_mp3', None)
+
 t = 0.0
 for i, sc in enumerate(scenes):
     say = (sc.get('say') or '').strip()
     words = say.split()
-    mp3 = os.path.join(work, 'v%02d.mp3' % i)
-    if say and not LOCAL:
+    marks = None
+    if sc.get('_mp3'):
+        d = dur(sc['_mp3'])
+    elif say and not LOCAL:
+        mp3 = os.path.join(work, 'v%02d.mp3' % i)
+        voice = EDGE_VOICE
+        if sc.get('who') == 'kid':
+            voice = spec.get('edgeKidVoice') or 'ar-EG-SalmaNeural'
         for k in range(4):
             try:
-                marks = asyncio.run(tts(say, mp3))
+                marks = asyncio.run(edge_tts_line(say, mp3, voice))
                 break
             except Exception as e:  # noqa: BLE001
                 log('tts retry', k, e)
                 time.sleep(4 * (k + 1))
         else:
             raise SystemExit('TTS failed')
+        sc['_mp3'] = mp3
         d = dur(mp3)
+        VOICE_USED = 'edge:' + EDGE_VOICE
     else:
         d = max(1.2, len(say) * 0.075)
+        mp3 = os.path.join(work, 'v%02d.mp3' % i)
         run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=24000:cl=mono', '-t', '%.2f' % d, mp3])
-        marks, step = [], d / max(1, len(words))
-        for j, w in enumerate(words):
-            marks.append([j * step, (j + 1) * step, w])
-    # map boundaries → caption words (same order)
-    wt = []
-    for j, w in enumerate(words):
-        if j < len(marks):
-            wt.append([round(marks[j][0], 3), round(marks[j][1], 3)])
-        else:
-            wt.append([round(d, 3), round(d, 3)])
-    sc['_mp3'], sc['_voice'] = mp3, d
+        sc['_mp3'] = mp3
+    if not marks or len(marks) < len(words) * 0.6:
+        # no word timings (Gemini voice): spread the words over the line by their length
+        L = [len(w) + 2 for w in words] or [1]
+        tot, acc, marks = sum(L), 0.0, []
+        for w, l in zip(words, L):
+            a = acc / tot * d * 0.97
+            acc += l
+            marks.append([a, acc / tot * d * 0.97, w])
+    wt = [[round(marks[j][0], 3), round(marks[j][1], 3)] if j < len(marks) else [round(d, 3), round(d, 3)] for j in range(len(words))]
+    sc['_voice'] = d
     sc['_words'] = [[w, a, b] for w, (a, b) in zip(words, wt)]
     sc['_dur'] = max(float(sc.get('min', 2.5)), PAD_IN + d + PAD_OUT + float(sc.get('hold', 0)))
     sc['_start'] = t
     t += sc['_dur']
 TOTAL = t
-log('scenes', len(scenes), 'total %.1fs' % TOTAL)
+log('scenes', len(scenes), 'total %.1fs' % TOTAL, 'voice', VOICE_USED)
 
 # voice track: each line placed at scene start + PAD_IN
 inputs, filt = [], []
@@ -188,13 +315,64 @@ def music(path, seconds, seed):
         wv.writeframes((buf * 32767).astype(np.int16).tobytes())
 
 
+def sfx(path, seconds):
+    """little cartoon sound effects: whoosh between scenes, pop when things appear, chime for sparkles"""
+    sr = 44100
+    buf = np.zeros(int(sr * (seconds + 1)))
+    rng = np.random.default_rng(7)
+
+    def put(t0, w):
+        s = int(t0 * sr)
+        if 0 <= s < len(buf):
+            e = min(len(buf), s + len(w))
+            buf[s:e] += w[:e - s]
+
+    def pop(f=520):
+        x = np.arange(int(sr * .12)) / sr
+        return np.sin(2 * np.pi * (f + 900 * np.exp(-x * 40)) * x) * np.exp(-x * 38) * .5
+
+    def whoosh():
+        L = int(sr * .45)
+        x = np.arange(L) / sr
+        n = rng.standard_normal(L)
+        k = np.convolve(n, np.ones(18) / 18, mode='same')
+        return k * np.sin(np.pi * x / x[-1]) ** 2 * .35
+
+    def chime():
+        x = np.arange(int(sr * .7)) / sr
+        return sum(np.sin(2 * np.pi * f * x) * np.exp(-x * (5 + k * 2)) for k, f in enumerate((1568, 2093, 2637))) * .12
+
+    for i, sc in enumerate(scenes):
+        st = sc['_start']
+        if i:
+            put(st - .15, whoosh())
+        if sc.get('label'):
+            put(st + .2, pop(640))
+        n = 0
+        for j, it in enumerate(sc.get('items') or []):
+            if it.get('nopop') or n >= 6:
+                continue
+            tt = st + float(it.get('dl', j * .12)) + .08
+            put(tt, chime() if it.get('p') in ('sparkle', 'star') else pop(440 + 60 * (n % 4)))
+            n += 1
+    buf = buf[:int(sr * seconds)]
+    buf = np.clip(buf, -1, 1)
+    with wave.open(path, 'wb') as wv:
+        wv.setnchannels(1)
+        wv.setsampwidth(2)
+        wv.setframerate(sr)
+        wv.writeframes((buf * 32767).astype(np.int16).tobytes())
+
+
+fx = os.path.join(work, 'sfx.wav')
+sfx(fx, TOTAL)
 mus = os.path.join(work, 'music.wav')
 music(mus, TOTAL, spec.get('seed') or spec.get('title', 'x'))
 audio = os.path.join(work, 'audio.m4a')
 MV = float(spec.get('musicVol', 0.13))
-run(['ffmpeg', '-y', '-loglevel', 'error', '-i', voice, '-i', mus, '-filter_complex',
-     '[1:a]volume=%.3f[m];[m][0:a]sidechaincompress=threshold=0.03:ratio=4:attack=20:release=400[md];'
-     '[0:a]volume=1.6[vv];[vv][md]amix=inputs=2:normalize=0,alimiter=limit=0.95[a]' % MV,
+run(['ffmpeg', '-y', '-loglevel', 'error', '-i', voice, '-i', mus, '-i', fx, '-filter_complex',
+     '[0:a]asplit[v1][v2];[1:a]volume=%.3f[m];[m][v1]sidechaincompress=threshold=0.03:ratio=4:attack=20:release=400[md];'
+     '[2:a]volume=%.3f[fx];[v2]volume=1.6[vv];[vv][md][fx]amix=inputs=3:normalize=0,alimiter=limit=0.95[a]' % (MV, float(spec.get('sfxVol', 0.55))),
      '-map', '[a]', '-c:a', 'aac', '-b:a', '160k', audio])
 log('audio ready')
 
@@ -315,6 +493,6 @@ else:
     ci = min(1, len(parts) - 1)
     run(['ffmpeg', '-y', '-loglevel', 'error', '-ss', '1.2', '-i', parts[ci], '-frames:v', '1', '-q:v', '3', cover])
 
-info = {'type': KIND, 'title': spec.get('title'), 'duration': round(dur(video), 2), 'size': os.path.getsize(video), 'scenes': len(scenes)}
+info = {'voice': VOICE_USED, 'type': KIND, 'title': spec.get('title'), 'duration': round(dur(video), 2), 'size': os.path.getsize(video), 'scenes': len(scenes)}
 json.dump(info, open(os.path.join(out, 'info.json'), 'w'), ensure_ascii=False)
 log('done', json.dumps(info, ensure_ascii=False))
