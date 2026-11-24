@@ -293,7 +293,7 @@ else:
             loop = ['-stream_loop', '-1'] if cd - ss < d else []
             fc = ('[0:v]fps=%d,split[a][b];'
                   '[a]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,boxblur=28:2,eq=brightness=-0.08:saturation=1.25[bg];'
-                  '[b]scale=1000:1240:force_original_aspect_ratio=decrease,setsar=1,'
+                  '[b]scale=1000:1000:force_original_aspect_ratio=decrease,setsar=1,'
                   'pad=iw+24:ih+24:12:12:color=white[fg];'
                   '[bg][fg]overlay=(W-w)/2:(H-h)/2-40[v1];'
                   '[1:v]format=rgba,fade=t=in:st=0.15:d=0.35:alpha=1[o];'
