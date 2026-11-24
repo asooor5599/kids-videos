@@ -76,6 +76,7 @@
     text: o => `<div class="ttl" dir="${o.dir || "rtl"}" style="--c:${o.c || '#ffffff'};font-size:${o.size || 64}px">${esc(o.t)}</div>`,
   };
 
+  if (window.KIDS_ART) Object.assign(P, window.KIDS_ART.P);
   const BG = {
     day: ['#7cc8ff', '#d9f2ff', '#8bd17c', '#6cc35d', '#7ccf5a'],
     sunset: ['#ff9e7a', '#ffe1b0', '#7fb069', '#5f9e57', '#6cbf55'],
@@ -83,6 +84,7 @@
   };
   function background(name) {
     if (name === 'none') return '';
+    if (window.KIDS_ART) { const h = window.KIDS_ART.background(name); if (h) return h; }
     if (name === 'room') return `<div class="bg room"><div class="dots"></div><div class="floor"></div></div>`;
     if (name === 'sky') return `<div class="bg" style="background:linear-gradient(#7cc8ff,#e3f6ff)"></div>`;
     if (name && name[0] === '#') return `<div class="bg" style="background:${name}"></div>`;
@@ -95,7 +97,8 @@
   }
 
   function item(o, i) {
-    const anims = String(o.a || '').split(/\s+/).filter(Boolean);
+    const all = String(o.a || '').split(/\s+/).filter(Boolean), wave = all.includes('wave');
+    const anims = all.filter(a => a !== 'wave');
     let inner = (P[o.p] || P.text)(o);
     if (o.f) inner = `<div style="transform:scaleX(-1)">${inner}</div>`;
     const outerA = anims.filter(a => ['walk', 'fly', 'drift', 'rise', 'fall', 'enter'].includes(a));
@@ -103,7 +106,7 @@
     innerA.reverse().forEach(a => { inner = `<div class="a-${a}">${inner}</div>`; });
     outerA.forEach(a => { inner = `<div class="a-${a}">${inner}</div>`; });
     const st = `left:${o.x ?? 270}px;top:${o.y ?? 760}px;--s:${o.s ?? 1};--dl:${o.dl ?? i * .12}s;--dx:${o.dx ?? 180}px;--dy:${o.dy ?? -120}px;z-index:${o.z ?? 10 + i}`;
-    return `<div class="it ${o.nopop ? '' : 'pop'}" style="${st}">${inner}</div>`;
+    return `<div class="it ${o.nopop ? '' : 'pop'}${o.talk ? ' talk' : ''}${wave ? ' waving' : ''}" style="${st}">${inner}</div>`;
   }
 
   function caption(sc) {
@@ -111,11 +114,18 @@
     return `<div class="cap"><div class="capin">${sc._words.map(w => `<span data-a="${w[1]}" data-b="${w[2]}">${esc(w[0])}</span>`).join(' ')}</div></div>`;
   }
 
+  stage.insertAdjacentHTML('beforebegin', '<svg width="0" height="0" style="position:absolute"><defs><filter id="ksoft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter><linearGradient id="kfog" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs></svg>');
   const els = [];
   D.scenes.forEach((sc, i) => {
     const el = document.createElement('div');
     el.className = 'scene'; el.style.setProperty('--d', sc._dur); el.style.zIndex = i + 1;
-    const world = D.kind === 'toys' ? '' : `<div class="world">${background(sc.bg || (D.kind === 'lesson' ? 'room' : 'day'))}${(sc.items || []).map(item).join('')}</div>`;
+    const bgName = sc.bg || (D.kind === 'lesson' ? 'room' : 'day');
+    const cams = D.kind === 'story' ? ['kb', 'panL', 'in', 'panR'] : ['kb'];
+    let cam = sc.cam || cams[i % cams.length], fo = '';
+    const talker = (sc.items || []).find(o => o.talk);
+    if (talker && !sc.cam) { cam = 'focus'; fo = `--fx:${talker.x}px;--fy:${(talker.y || 760) - 160}px`; }
+    const front = window.KIDS_ART ? window.KIDS_ART.front(bgName) : '';
+    const world = D.kind === 'toys' ? '' : `<div class="world cam-${cam}" style="${fo}">${background(bgName)}${(sc.items || []).map(item).join('')}${front}</div>`;
     const badge = i > 0 && D.title ? `<div class="badge"${D.wmPos === 'tr' ? ' style="right:auto;left:22px"' : ''}>${esc(D.title)}</div>` : '';
     const label = sc.label ? `<div class="label">${esc(sc.label)}</div>` : '';
     el.innerHTML = world + badge + label + caption(sc);
@@ -136,8 +146,15 @@
       const el = els[i], local = t - sc._start, vis = local >= 0 && local < sc._dur + 0.4;
       el.style.visibility = vis ? 'visible' : 'hidden';
       if (!vis) return;
-      el.style.opacity = i === 0 ? 1 : Math.min(1, local / 0.35);
+      if (i === 0 || D.kind === 'toys') { el.style.opacity = i === 0 ? 1 : Math.min(1, local / 0.35); }
+      else { el.style.opacity = 1; const p = Math.min(1, local / 0.7), e = 1 - Math.pow(1 - p, 3); el.style.clipPath = p >= 1 ? 'none' : `circle(${(e * 120).toFixed(2)}% at 50% 58%)`; }
       freeze(el, local);
+      const A = D.amp || [], fps = D.fps || 24;
+      el.querySelectorAll('.talk').forEach(tk => {
+        const m = sc.who === 'kid' ? (A[Math.round(t * fps)] || 0) : 0;
+        tk.querySelectorAll('.mopen').forEach(x => { x.style.transform = `scaleY(${m.toFixed(3)})`; });
+        tk.querySelectorAll('.mclosed').forEach(x => { x.style.opacity = m > 0.12 ? 0 : 1; });
+      });
     });
   };
   window.overlay = function (i) {
